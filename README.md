@@ -49,7 +49,7 @@ As APIs estão em `/api`. O cookie administrativo é criado pelo backend após v
 
 ## Fluxo de uma operação
 
-No painel, a equipe informa somente o valor disponível. O sistema cria as etapas e gera uma chave individual, exibida uma única vez. O cliente usa a chave em `/acesso` e preenche seus dados pessoais, o produto, os dados bancários e o endereço para continuar.
+No painel, a equipe informa somente o valor disponível. O sistema cria as etapas e gera uma chave individual, exibida uma única vez. O cliente usa a chave em `/acesso` e preenche seus dados pessoais, bancários e o endereço para continuar.
 
 ## Deploy
 

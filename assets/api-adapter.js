@@ -3,6 +3,12 @@
   'use strict';
   const portal = window.__portal;
   if (!portal) return;
+  document.addEventListener('submit', event => {
+    if (event.target?.id !== 'client-registration-form') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.saveRegistration(event);
+  }, true);
   const api = async (url, options = {}) => {
     const response = await fetch(url, {
       credentials: 'same-origin',
@@ -39,7 +45,7 @@
       number: item.publicOperationNumber || item.number,
       customer: customerName,
       document: customer.document || '', phone: customer.phone || item.phone || '', email: customer.email || item.email || '',
-      product: item.productName || item.product || '', amount: Number(item.availableAmount ?? item.amount ?? 0),
+      product: item.productName || item.product || '—', amount: Number(item.availableAmount ?? item.amount ?? 0),
       status: item.status || 'AGUARDANDO_CADASTRO', step: stepFor(item.status),
       created: toIso(item.createdAt || item.created), updated: toIso(item.updatedAt || item.updated),
       tokenActive: activeToken ? activeToken.active : item.tokenActive ?? true,
@@ -233,9 +239,21 @@
     catch (err) { error(err); }
   };
   window.saveRegistration = async event => {
-    event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api('/api/client/registration', { method: 'POST', body: JSON.stringify(data) }); await refreshClient(); flash('Dados enviados com sucesso.'); }
-    catch (err) { error(err); }
+    event.preventDefault();
+    const form = event.target;
+    const button = form.querySelector('button[type="submit"],button:not([type])');
+    const errorNode = form.querySelector('#registration-error');
+    const data = Object.fromEntries(new FormData(form));
+    if (button) { button.disabled = true; button.textContent = 'Salvando cadastro…'; }
+    if (errorNode) errorNode.textContent = '';
+    try {
+      await api('/api/client/registration', { method: 'POST', body: JSON.stringify(data) });
+      await refreshClient(); flash('Cadastro concluído. Próxima etapa liberada.');
+    } catch (err) {
+      if (errorNode) errorNode.textContent = err.message || 'Não foi possível salvar. Confira os dados e tente novamente.';
+      if (button) { button.disabled = false; button.textContent = 'Salvar informações'; }
+      error(err);
+    }
   };
   window.savePickup = async event => {
     event.preventDefault(); const body = Object.fromEntries(new FormData(event.currentTarget));
