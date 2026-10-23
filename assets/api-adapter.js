@@ -79,6 +79,7 @@
   async function refreshSettings() {
     const response = await api('/api/admin/settings');
     portal.db.settings = { ...portal.db.settings, ...response.settings };
+    if (portal.db.settings.companyName === 'LKX') portal.db.settings.companyName = 'OLX';
   }
   const adminRoute = path => path.startsWith('/admin') && path !== '/admin/login';
 
@@ -302,7 +303,7 @@
   });
 
   function setupPage() {
-    document.getElementById('app').innerHTML = `<main class="access-page"><section class="access-aside" style="background:linear-gradient(145deg,#f4effa 0%,#ffffff 85%)"><div class="aside-copy"><div class="brand"><div class="logo-mark">LKX</div><div class="brand-copy">LKX<small>Portal de operações</small></div></div><div style="height:54px"></div><div class="eyebrow">Acompanhamento seguro</div><h2>Clareza e tranquilidade em cada etapa.</h2><p>Acompanhe sua operação com informações organizadas e acesso protegido.</p><div class="notice" style="background:#fff;border-color:#e9e1f2">Seus dados são acessíveis somente por meio de uma sessão autorizada.</div></div></section><section class="access-main"><div class="access-box"><div class="eyebrow" style="margin-bottom:12px">Portal do cliente</div><h1>Estamos preparando seu acesso</h1><p>Não foi possível carregar o portal neste momento. Tente novamente em instantes.</p><div class="notice"><b>Seu acesso continua protegido.</b><br>Se a mensagem persistir, entre em contato com a equipe que forneceu sua chave.</div><button class="btn btn-primary" type="button" onclick="location.reload()">Tentar novamente</button></div></section></main>`;
+    document.getElementById('app').innerHTML = `<main class="access-page"><section class="access-aside" style="background:linear-gradient(145deg,#f4effa 0%,#ffffff 85%)"><div class="aside-copy"><div class="brand"><div class="logo-mark"><img src="/assets/logo-olx-purple.png" alt="OLX"></div><div class="brand-copy">OLX<small>Portal de operações</small></div></div><div style="height:54px"></div><div class="eyebrow">Acompanhamento seguro</div><h2>Clareza e tranquilidade em cada etapa.</h2><p>Acompanhe sua operação com informações organizadas e acesso protegido.</p><div class="notice" style="background:#fff;border-color:#e9e1f2">Seus dados são acessíveis somente por meio de uma sessão autorizada.</div></div></section><section class="access-main"><div class="access-box"><div class="eyebrow" style="margin-bottom:12px">Portal do cliente</div><h1>Estamos preparando seu acesso</h1><p>Não foi possível carregar o portal neste momento. Tente novamente em instantes.</p><div class="notice"><b>Seu acesso continua protegido.</b><br>Se a mensagem persistir, entre em contato com a equipe que forneceu sua chave.</div><button class="btn btn-primary" type="button" onclick="location.reload()">Tentar novamente</button></div></section></main>`;
   }
 
   async function bootstrap() {
