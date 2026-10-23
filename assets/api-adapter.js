@@ -1,4 +1,4 @@
-﻿/* Frontend adapter: all production reads/writes go through the protected API. */
+/* Frontend adapter: all production reads/writes go through the protected API. */
 (() => {
   'use strict';
   const portal = window.__portal;
@@ -123,18 +123,19 @@
     try {
       await api('/api/client/session', { method: 'POST', body: JSON.stringify({ token }) });
       const response = await api('/api/client/operation');
-      const op = mapOperation({ ...response.operation, id: response.operation.id, publicOperationNumber: response.operation.number, customerName: response.operation.customer?.name || response.operation.customerName, productName: response.operation.productName, availableAmount: response.operation.availableAmount, pickup: response.operation.pickup, delivery: response.operation.delivery, messages: response.operation.messages, history: response.operation.history, finalMessage: response.operation.finalMessage }, response.operation);
+      const op = mapOperation({ ...response.operation, id: response.operation.id, publicOperationNumber: response.operation.number, customerName: response.operation.customer?.name || response.operation.customerName, productName: response.operation.productName, availableAmount: response.operation.availableAmount, pickup: response.operation.pickup, delivery: response.operation.delivery, messages: response.operation.messages, finalMessage: response.operation.finalMessage }, response.operation);
       setOperations([op]); sessionStorage.setItem('portal_client_op', op.id);
       history.pushState({}, '', '/operacao'); portal.render(); startClientRefresh();
     } catch (err) { if (errorNode) errorNode.textContent = err.message || 'Chave inválida ou indisponível.'; }
   };
   let clientTimer = null;
-  async function refreshClient() {
+  async function refreshClient(forceRender = false) {
     if (location.pathname !== '/operacao') return;
+    if (!forceRender && document.querySelector('#app form')) return;
     try {
       const response = await api('/api/client/operation');
       const raw = response.operation;
-      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, history: raw.history, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
+      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
       setOperations([op]); portal.render();
     } catch (err) { if (err.message.includes('expirado') || err.message.includes('revogada')) { sessionStorage.removeItem('portal_client_op'); history.replaceState({}, '', '/acesso'); portal.render(); } }
   }
@@ -248,7 +249,7 @@
     if (errorNode) errorNode.textContent = '';
     try {
       await api('/api/client/registration', { method: 'POST', body: JSON.stringify(data) });
-      await refreshClient(); flash('Cadastro concluído. Próxima etapa liberada.');
+      await refreshClient(true); flash('Cadastro concluído. Próxima etapa liberada.');
     } catch (err) {
       if (errorNode) errorNode.textContent = err.message || 'Não foi possível salvar. Confira os dados e tente novamente.';
       if (button) { button.disabled = false; button.textContent = 'Salvar informações'; }
@@ -257,7 +258,7 @@
   };
   window.savePickup = async event => {
     event.preventDefault(); const body = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api('/api/client/pickup', { method: 'POST', body: JSON.stringify(body) }); await refreshClient(); flash('Retirada agendada.'); }
+    try { await api('/api/client/pickup', { method: 'POST', body: JSON.stringify(body) }); await refreshClient(true); flash('Retirada agendada.'); }
     catch (err) { error(err); }
   };
   window.submitPackage = async event => {
@@ -269,7 +270,7 @@
         method: 'POST',
         body: JSON.stringify({ files: choices.map(({ file, type }) => ({ type, fileName: file.name, contentType: file.type, size: file.size })) })
       });
-      await refreshClient(); flash('Seleção confirmada. A próxima etapa foi liberada.');
+      await refreshClient(true); flash('Seleção confirmada. A próxima etapa foi liberada.');
     } catch (err) { error(err); }
   };
 
@@ -298,7 +299,7 @@
         catch { sessionStorage.removeItem('portal_admin_auth'); }
       }
       if (path === '/operacao') {
-        try { const response = await api('/api/client/operation'); const raw = response.operation; const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, history: raw.history, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw); setOperations([op]); sessionStorage.setItem('portal_client_op', op.id); }
+        try { const response = await api('/api/client/operation'); const raw = response.operation; const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw); setOperations([op]); sessionStorage.setItem('portal_client_op', op.id); }
         catch { history.replaceState({}, '', '/acesso'); }
       }
       portal.render();

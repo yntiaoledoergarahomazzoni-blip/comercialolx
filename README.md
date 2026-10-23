@@ -66,6 +66,7 @@ Para domínio próprio, aponte o DNS para o host do portal, configure HTTPS e in
 - O token de acesso não é armazenado em texto; só seu hash SHA-256. A renovação revoga os tokens anteriores.
 - A resposta do cliente inclui somente sua operação e dados necessários ao acompanhamento. Dados bancários e documentos ficam fora do payload do portal.
 - Campos bancários ficam em coleção separada e só são servidos à API administrativa autenticada.
+- O histórico completo é visível somente no painel administrativo; a API do cliente não o retorna.
 - Foto e vídeo são selecionados no navegador. O conteúdo e os metadados não são armazenados nem enviados à equipe.
 - Mensagens, status e ações importantes são registrados no histórico.
 

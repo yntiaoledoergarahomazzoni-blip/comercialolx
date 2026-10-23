@@ -196,32 +196,30 @@ app.post('/api/client/session', tokenLimit, needDb, asyncRoute(async (req, res) 
   res.json({ ok: true });
 }));
 app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, res) => {
-  const [customer, steps, pickup, delivery, messages, history] = await Promise.all([
+  const [customer, steps, pickup, delivery, messages] = await Promise.all([
     db.collection('customers').doc(req.operationId).get(),
     req.operationRef.collection('steps').get(),
     db.collection('pickup_schedules').doc(req.operationId).get(),
     db.collection('delivery_partners').doc(req.operationId).get(),
-    req.operationRef.collection('messages').orderBy('createdAt', 'desc').limit(30).get(),
-    req.operationRef.collection('history').orderBy('createdAt', 'desc').limit(30).get()
+    req.operationRef.collection('messages').orderBy('createdAt', 'desc').limit(30).get()
   ]);
   const o = req.operation;
   res.json({ operation: {
     id: req.operationId, number: o.publicOperationNumber, customerName: o.customerName,
     productName: o.productName, availableAmount: o.availableAmount, status: o.status,
     steps: steps.docs.map(d => ({ id: d.id, ...d.data() })),
-    customer: customer.exists ? { name: customer.data().name, phone: customer.data().phone, email: customer.data().email, registrationComplete: customer.data().registrationComplete === true } : null,
+    customer: customer.exists ? { name: customer.data().name, phone: customer.data().phone, registrationComplete: customer.data().registrationComplete === true } : null,
     pickup: pickup.exists ? pickup.data() : null,
     delivery: delivery.exists ? { name: delivery.data().name, company: delivery.data().company, operationalPhone: delivery.data().operationalPhone, identification: delivery.data().identification, vehicleType: delivery.data().vehicleType, vehicleModel: delivery.data().vehicleModel, plateMasked: delivery.data().plateMasked, eta: delivery.data().eta, status: delivery.data().status } : null,
     finalMessage: o.finalMessage || '', updatedAt: o.updatedAt?.toDate?.().toISOString() || null,
     messages: messages.docs.map(d => ({ ...d.data(), author: 'Equipe de operações', createdAt: d.data().createdAt?.toDate?.().toISOString() })),
-    history: history.docs.map(d => ({ ...d.data(), actor: d.data().actor === 'Cliente' ? 'Cliente' : 'Equipe de operações', createdAt: d.data().createdAt?.toDate?.().toISOString() }))
   }});
 }));
 app.post('/api/client/logout', (req, res) => { res.clearCookie(CLIENT_COOKIE, COOKIE_BASE); res.json({ ok: true }); });
 
 const registrationSchema = z.object({
   name: z.string().trim().min(3).max(120), document: z.string().trim().min(8).max(24),
-  phone: z.string().trim().min(8).max(24), email: z.string().email().max(180),
+  phone: z.string().trim().min(8).max(24),
   bank: z.string().trim().min(2).max(100), agency: z.string().trim().min(1).max(30),
   account: z.string().trim().min(1).max(40), accountType: z.string().trim().min(2).max(40),
   pix: z.string().trim().min(3).max(180), zip: z.string().trim().min(5).max(12),
@@ -237,7 +235,7 @@ app.post('/api/client/registration', clientWriteLimit, needDb, requireClient, as
   if (currentCustomer.data()?.registrationComplete === true) return fail(res, 409, 'O cadastro já foi concluído.');
   const data = parsed.data;
   const customerRef = db.collection('customers').doc(req.operationId);
-  await customerRef.set({ operationId: req.operationId, name: data.name, document: data.document, phone: data.phone, email: data.email, registrationComplete: true, updatedAt: now() }, { merge: true });
+  await customerRef.set({ operationId: req.operationId, name: data.name, document: data.document, phone: data.phone, registrationComplete: true, updatedAt: now() }, { merge: true });
   await db.collection('bank_details').doc(req.operationId).set({ operationId: req.operationId, bank: data.bank, agency: data.agency, account: data.account, accountType: data.accountType, pix: data.pix, updatedAt: now() });
   await db.collection('pickup_addresses').doc(req.operationId).set({ operationId: req.operationId, zip: data.zip, street: data.street, number: data.addressNumber, complement: data.complement, neighborhood: data.neighborhood, city: data.city, state: data.state, updatedAt: now() });
   const registeredAddress = `${data.street}, ${data.addressNumber}${data.complement ? `, ${data.complement}` : ''} - ${data.neighborhood}, ${data.city}/${data.state} - CEP ${data.zip}`;
