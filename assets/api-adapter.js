@@ -33,6 +33,8 @@
     const d = detail.delivery || item.delivery;
     const p = detail.pickup || item.pickup;
     const customer = detail.customer || item.customer || {};
+    const bank = detail.bankDetails || {};
+    const address = detail.pickupAddress || {};
     const packageStep = (detail.steps || item.steps || []).find(s => s.id === 'embalagem');
     const packageStatus = packageStep?.status === 'APROVADO' ? 'approved' : packageStep?.status === 'NOVO_ENVIO_SOLICITADO' ? 'resubmit' : 'pending';
     const history = (detail.history || item.history || []).map(mapHistory);
@@ -45,6 +47,7 @@
       number: item.publicOperationNumber || item.number,
       customer: customerName,
       document: customer.document || '', phone: customer.phone || item.phone || '', email: customer.email || item.email || '',
+      customerDetails: { bank: bank.bank || '', agency: bank.agency || '', account: bank.account || '', accountType: bank.accountType || '', pix: bank.pix || '', zip: address.zip || '', street: address.street || '', number: address.number || '', complement: address.complement || '', neighborhood: address.neighborhood || '', city: address.city || '', state: address.state || '' },
       product: item.productName || item.product || '—', amount: Number(item.availableAmount ?? item.amount ?? 0),
       status: item.status || 'AGUARDANDO_CADASTRO', step: stepFor(item.status),
       created: toIso(item.createdAt || item.created), updated: toIso(item.updatedAt || item.updated),
