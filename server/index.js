@@ -316,7 +316,7 @@ app.put('/api/admin/settings', needDb, requireAdmin, asyncRoute(async (req, res)
   res.json({ ok: true, settings: parsed.data });
 }));
 app.post('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, res) => {
-  const schema = z.object({ availableAmount: z.number().finite().nonnegative(), blockClientAfterCompletion: z.boolean().default(true) }).strict();
+  const schema = z.object({ productName: z.string().trim().max(180).optional().default(''), availableAmount: z.number().finite().nonnegative(), blockClientAfterCompletion: z.boolean().default(true) }).strict();
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados da operação.');
   const id = crypto.randomUUID();
@@ -327,7 +327,7 @@ app.post('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, r
   const serverNow = now();
   const value = parsed.data;
   await db.runTransaction(async tx => {
-    tx.create(opRef, { publicOperationNumber: number, customerName: 'Cadastro pendente', productName: '', availableAmount: value.availableAmount, status: 'AGUARDANDO_CADASTRO', currentStep: 'CADASTRO', pickupAddress: '', blockClientAfterCompletion: value.blockClientAfterCompletion, createdAt: serverNow, updatedAt: serverNow });
+    tx.create(opRef, { publicOperationNumber: number, customerName: 'Cadastro pendente', productName: value.productName, availableAmount: value.availableAmount, status: 'AGUARDANDO_CADASTRO', currentStep: 'CADASTRO', pickupAddress: '', blockClientAfterCompletion: value.blockClientAfterCompletion, createdAt: serverNow, updatedAt: serverNow });
     tx.create(db.collection('access_tokens').doc(hashed), { operationId: id, active: true, createdAt: serverNow, accessCount: 0 });
     tx.create(db.collection('customers').doc(id), { operationId: id, registrationComplete: false, createdAt: serverNow });
     tx.create(opRef.collection('steps').doc('cadastro'), { status: 'ATUAL', createdAt: serverNow });

@@ -197,7 +197,7 @@
   window.createOperation = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
-    const payload = { availableAmount: Number(data.amount), blockClientAfterCompletion: true };
+    const payload = { productName: data.product?.trim() || '', availableAmount: Number(data.amount), blockClientAfterCompletion: true };
     try {
       const result = await api('/api/admin/operations', { method: 'POST', body: JSON.stringify(payload) });
       await refreshAdmin(result.operation.id); window.closeModal();
