@@ -42,7 +42,7 @@ if (databaseConfigured) {
     });
     db = getFirestore(firebaseApp);
   } catch (err) {
-    console.error('Firebase Admin não inicializou:', err.code || err.name || 'Error');
+    console.error('Firebase Admin não inicializou:', err.message);
   }
 }
 
@@ -58,12 +58,8 @@ app.use(helmet({
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use('/api/', (req, res, next) => {
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-    const origin = req.get('origin');
-    const fetchSite = req.get('sec-fetch-site');
-    if ((origin && origin !== `${req.protocol}://${req.get('host')}`) || fetchSite === 'cross-site')
-      return fail(res, 403, 'Origem não autorizada.');
-  }
+  const origin = req.get('origin');
+  if (origin && origin !== `${req.protocol}://${req.get('host')}`) return fail(res, 403, 'Origem não autorizada.');
   next();
 });
 app.use('/api/', (req, res, next) => {
@@ -79,7 +75,7 @@ const fail = (res, status, message) => res.status(status).json({ error: message 
 const needDb = (req, res, next) => db ? next() : fail(res, 503, 'Firebase ainda não está configurado.');
 const clean = value => String(value ?? '').trim();
 const now = () => Timestamp.now();
-const saoPauloToday = () => { const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()); const values = Object.fromEntries(parts.map(part => [part.type, part.value])); return values.year + '-' + values.month + '-' + values.day; };
+const saoPauloToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const pickupPeriods = Array.from({ length: 28 }, (_, i) => {
   const format = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   return `${format(480 + i * 30)} – ${format(510 + i * 30)}`;
@@ -178,6 +174,7 @@ app.post('/api/auth/session', loginLimit, needDb, asyncRoute(async (req, res) =>
 app.get('/api/auth/me', needDb, requireAdmin, (req, res) => res.json({ uid: req.admin.uid, email: req.admin.email }));
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie(ADMIN_COOKIE, COOKIE_BASE);
+  res.clearCookie(CLIENT_COOKIE, COOKIE_BASE);
   res.json({ ok: true });
 });
 
@@ -195,10 +192,10 @@ app.post('/api/client/session', tokenLimit, needDb, asyncRoute(async (req, res) 
   const operation = opSnap.data();
   if (operation.status === 'CONCLUIDA' && operation.blockClientAfterCompletion)
     return fail(res, 403, 'O acesso a esta operação foi encerrado.');
-  if (operation.status === 'CANCELADA') return fail(res, 403, 'O acesso a esta operação foi encerrado.');
   const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
   res.cookie(CLIENT_COOKIE, signClientSession(tokenData.operationId, hash, expiresAt), { ...COOKIE_BASE, maxAge: 12 * 60 * 60 * 1000 });
   await snap.ref.update({ lastAccessAt: now(), accessCount: FieldValue.increment(1) });
+  await addHistory(opRef, 'Cliente acessou o portal', 'Cliente');
   res.json({ ok: true });
 }));
 app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, res) => {
@@ -213,12 +210,12 @@ app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, r
   res.json({ operation: {
     id: req.operationId, number: o.publicOperationNumber, customerName: o.customerName,
     productName: o.productName, availableAmount: o.availableAmount, status: o.status,
-    steps: steps.docs.map(d => ({ id: d.id, status: d.data().status })),
-    customer: customer.exists ? { name: customer.data().name, registrationComplete: customer.data().registrationComplete === true } : null,
-    pickup: pickup.exists ? { date: pickup.data().date, period: pickup.data().period, address: pickup.data().address, notes: pickup.data().notes || '' } : null,
+    steps: steps.docs.map(d => ({ id: d.id, ...d.data() })),
+    customer: customer.exists ? { name: customer.data().name, phone: customer.data().phone, registrationComplete: customer.data().registrationComplete === true } : null,
+    pickup: pickup.exists ? pickup.data() : null,
     delivery: delivery.exists ? { name: delivery.data().name, company: delivery.data().company, vehicleType: delivery.data().vehicleType, vehicleModel: delivery.data().vehicleModel, plateMasked: delivery.data().plateMasked, eta: delivery.data().eta, status: delivery.data().status } : null,
     finalMessage: o.finalMessage || '', updatedAt: o.updatedAt?.toDate?.().toISOString() || null,
-    messages: messages.docs.map(d => ({ content: d.data().content, author: 'Equipe de operações', createdAt: d.data().createdAt?.toDate?.().toISOString() })),
+    messages: messages.docs.map(d => ({ ...d.data(), author: 'Equipe de operações', createdAt: d.data().createdAt?.toDate?.().toISOString() })),
   }});
 }));
 app.post('/api/client/logout', (req, res) => { res.clearCookie(CLIENT_COOKIE, COOKIE_BASE); res.json({ ok: true }); });
@@ -245,24 +242,18 @@ app.post('/api/client/registration', clientWriteLimit, needDb, requireClient, as
   if (req.operation.status !== 'AGUARDANDO_CADASTRO') return fail(res, 409, 'O cadastro não está disponível nesta etapa.');
   const parsed = registrationSchema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do cadastro e tente novamente.');
+  const currentCustomer = await db.collection('customers').doc(req.operationId).get();
+  if (currentCustomer.data()?.registrationComplete === true) return fail(res, 409, 'O cadastro já foi concluído.');
   const data = parsed.data;
   const customerRef = db.collection('customers').doc(req.operationId);
-  const bankRef = db.collection('bank_details').doc(req.operationId);
-  const addressRef = db.collection('pickup_addresses').doc(req.operationId);
+  await customerRef.set({ operationId: req.operationId, name: data.name, document: data.document, phone: data.phone, registrationComplete: true, updatedAt: now() }, { merge: true });
+  await db.collection('bank_details').doc(req.operationId).set({ operationId: req.operationId, bank: data.bank, agency: data.agency, account: data.account, accountType: data.accountType, pix: data.pix, updatedAt: now() });
+  await db.collection('pickup_addresses').doc(req.operationId).set({ operationId: req.operationId, zip: data.zip, street: data.street, number: data.addressNumber, complement: data.complement, neighborhood: data.neighborhood, city: data.city, state: data.state, updatedAt: now() });
   const registeredAddress = `${data.street}, ${data.addressNumber}${data.complement ? `, ${data.complement}` : ''} - ${data.neighborhood}, ${data.city}/${data.state} - CEP ${data.zip}`;
-  await db.runTransaction(async tx => {
-    const [opSnap, customerSnap] = await Promise.all([tx.get(req.operationRef), tx.get(customerRef)]);
-    if (!opSnap.exists || opSnap.data().status !== 'AGUARDANDO_CADASTRO' || customerSnap.data()?.registrationComplete === true)
-      throw Object.assign(new Error('O cadastro não está mais disponível nesta etapa.'), { status: 409 });
-    const stamp = now();
-    tx.set(customerRef, { operationId: req.operationId, name: data.name, document: data.document, phone: data.phone, registrationComplete: true, updatedAt: stamp }, { merge: true });
-    tx.set(bankRef, { operationId: req.operationId, bank: data.bank, agency: data.agency, account: data.account, accountType: data.accountType, pix: data.pix, updatedAt: stamp });
-    tx.set(addressRef, { operationId: req.operationId, zip: data.zip, street: data.street, number: data.addressNumber, complement: data.complement, neighborhood: data.neighborhood, city: data.city, state: data.state, updatedAt: stamp });
-    tx.update(req.operationRef, { customerName: data.name, pickupAddress: registeredAddress, status: 'AGUARDANDO_EMBALAGEM', currentStep: 'EMBALAGEM', updatedAt: stamp });
-    tx.set(req.operationRef.collection('steps').doc('cadastro'), { status: 'CONCLUIDO', completedAt: stamp }, { merge: true });
-    tx.set(req.operationRef.collection('steps').doc('embalagem'), { status: 'ATUAL' }, { merge: true });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Dados cadastrados', actor: 'Cliente', createdAt: stamp });
-  });
+  await req.operationRef.update({ customerName: data.name, pickupAddress: registeredAddress, status: 'AGUARDANDO_EMBALAGEM', currentStep: 'EMBALAGEM', updatedAt: now() });
+  await req.operationRef.collection('steps').doc('cadastro').set({ status: 'CONCLUIDO', completedAt: now() }, { merge: true });
+  await req.operationRef.collection('steps').doc('embalagem').set({ status: 'PENDENTE' }, { merge: true });
+  await addHistory(req.operationRef, 'Dados cadastrados', 'Cliente');
   res.json({ ok: true });
 }));
 app.post('/api/client/pickup', clientWriteLimit, needDb, requireClient, asyncRoute(async (req, res) => {
@@ -270,18 +261,12 @@ app.post('/api/client/pickup', clientWriteLimit, needDb, requireClient, asyncRou
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do agendamento.');
   if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
-  if (req.operation.status !== 'AGUARDANDO_AGENDAMENTO') return fail(res, 409, 'O agendamento não está disponível nesta etapa.');
-  const pickupRef = db.collection('pickup_schedules').doc(req.operationId);
-  await db.runTransaction(async tx => {
-    const [opSnap, materialSnap] = await Promise.all([tx.get(req.operationRef), tx.get(req.operationRef.collection('steps').doc('embalagem'))]);
-    if (!opSnap.exists || opSnap.data().status !== 'AGUARDANDO_AGENDAMENTO' || materialSnap.data()?.status !== 'APROVADO')
-      throw Object.assign(new Error('O agendamento não está mais disponível nesta etapa.'), { status: 409 });
-    const stamp = now();
-    tx.set(pickupRef, { operationId: req.operationId, ...parsed.data, status: 'CONFIRMADO', updatedAt: stamp });
-    tx.update(req.operationRef, { status: 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: stamp });
-    tx.set(req.operationRef.collection('steps').doc('retirada'), { status: 'CONCLUIDO', completedAt: stamp }, { merge: true });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Retirada agendada', actor: 'Cliente', createdAt: stamp });
-  });
+  if (req.operation.status !== 'AGUARDANDO_AGENDAMENTO' && req.operation.status !== 'EMBALAGEM_APROVADA') return fail(res, 409, 'O agendamento não está disponível nesta etapa.');
+  const material = await req.operationRef.collection('steps').doc('embalagem').get();
+  if (material.data()?.status !== 'APROVADO') return fail(res, 409, 'Conclua o envio da foto e do vídeo para liberar a retirada.');
+  await db.collection('pickup_schedules').doc(req.operationId).set({ operationId: req.operationId, ...parsed.data, status: 'CONFIRMADO', updatedAt: now() });
+  await req.operationRef.update({ status: 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: now() });
+  await addHistory(req.operationRef, 'Retirada agendada', 'Cliente');
   res.json({ ok: true });
 }));
 
@@ -291,22 +276,13 @@ app.get('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, re
     const customer = await db.collection('customers').doc(doc.id).get();
     const pickup = await db.collection('pickup_schedules').doc(doc.id).get();
     const delivery = await db.collection('delivery_partners').doc(doc.id).get();
-    const schedule = pickup.data();
-    const partner = delivery.data();
-    return { ...serialize(doc.data(), doc.id), customerName: customer.data()?.name || doc.data().customerName, pickup: pickup.exists ? { date: schedule.date, period: schedule.period } : null, delivery: delivery.exists ? { name: partner.name, company: partner.company, vehicleType: partner.vehicleType, vehicleModel: partner.vehicleModel, plateMasked: partner.plateMasked, eta: partner.eta, status: partner.status } : null };
+    return { ...serialize(doc.data(), doc.id), customerName: customer.data()?.name || doc.data().customerName, phone: customer.data()?.phone || '', email: customer.data()?.email || '', pickup: pickup.exists ? pickup.data() : null, delivery: delivery.exists ? { name: delivery.data().name, company: delivery.data().company, status: delivery.data().status } : null };
   }));
   res.json({ operations: rows });
 }));
-app.get('/api/admin/operations/changes', needDb, requireAdmin, asyncRoute(async (req, res) => {
-  const parsed = z.string().datetime().safeParse(req.query.since);
-  if (!parsed.success) return fail(res, 400, 'Informe a data da última consulta.');
-  const since = Timestamp.fromDate(new Date(parsed.data));
-  const snap = await db.collection('operations').where('updatedAt', '>', since).orderBy('updatedAt').limit(100).get();
-  res.json({ changes: snap.docs.map(doc => ({ id: doc.id, status: doc.data().status, updatedAt: doc.data().updatedAt?.toDate?.().toISOString() || null })) });
-}));
 app.get('/api/admin/settings', needDb, requireAdmin, asyncRoute(async (req, res) => {
   const snap = await db.collection('settings').doc('portal').get();
-  const settings = snap.exists ? snap.data() : { companyName: 'OLX', phone: '', whatsapp: '', email: '', domain: process.env.NEXT_PUBLIC_APP_URL || '', institutional: '', support: '', primaryColor: '#6545a5', secondaryColor: '#706a78', accentColor: '#de8845' };
+  const settings = snap.exists ? snap.data() : { companyName: 'LKX', phone: '', whatsapp: '', email: '', domain: process.env.NEXT_PUBLIC_APP_URL || '', institutional: '', support: '', primaryColor: '#6545a5', secondaryColor: '#706a78', accentColor: '#de8845' };
   if (!settings.whatsapp) settings.whatsapp = '5511970306311';
   res.json({ settings });
 }));
@@ -350,29 +326,16 @@ app.get('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, async
     req.operationRef.collection('messages').orderBy('createdAt', 'desc').get(),
     req.operationRef.collection('history').orderBy('createdAt', 'desc').get(), db.collection('access_tokens').where('operationId', '==', id).get()
   ]);
-  res.json({ operation: serialize(req.operation, id), customer: customer.data() || null, bankDetails: bank.data() || null, pickupAddress: address.data() || null, steps: steps.docs.map(d => ({ id: d.id, ...d.data() })), pickup: pickup.data() || null, delivery: delivery.data() || null, messages: messages.docs.map(d => d.data()), history: history.docs.map(d => d.data()), tokens: tokens.docs.map(d => ({ active: d.data().active, lastAccessAt: d.data().lastAccessAt || null })) });
+  res.json({ operation: serialize(req.operation, id), customer: customer.data() || null, bankDetails: bank.data() || null, pickupAddress: address.data() || null, steps: steps.docs.map(d => ({ id: d.id, ...d.data() })), pickup: pickup.data() || null, delivery: delivery.data() || null, messages: messages.docs.map(d => d.data()), history: history.docs.map(d => d.data()), tokens: tokens.docs.map(d => ({ id: d.id, active: d.data().active, lastAccessAt: d.data().lastAccessAt || null })) });
 }));
 app.patch('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
-  const schema = z.object({ customerName: z.string().trim().min(2).max(120).optional(), customerDocument: z.union([z.string().trim().min(8).max(24), z.literal(''), z.null()]).optional(), phone: z.union([z.string().trim().min(8).max(24), z.literal(''), z.null()]).optional(), email: z.union([z.string().email(), z.literal(''), z.null()]).optional(), productName: z.string().trim().min(2).max(180).optional(), availableAmount: z.number().finite().nonnegative().optional(), pickupAddress: z.string().max(500).optional(), status: z.enum(['CONCLUIDA','CANCELADA']).optional(), blockClientAfterCompletion: z.boolean().optional(), internalNotes: z.string().max(2000).optional(), finalMessage: z.string().max(2000).optional() }).strict();
+  const schema = z.object({ customerName: z.string().trim().min(2).max(120).optional(), customerDocument: z.string().trim().min(8).max(24).optional(), phone: z.string().trim().min(8).max(24).optional(), email: z.string().email().optional(), productName: z.string().trim().min(2).max(180).optional(), availableAmount: z.number().finite().nonnegative().optional(), pickupAddress: z.string().max(500).optional(), status: z.enum(['CONCLUIDA','CANCELADA']).optional(), blockClientAfterCompletion: z.boolean().optional(), internalNotes: z.string().max(2000).optional(), finalMessage: z.string().max(2000).optional() }).strict();
   const parsed = schema.safeParse(req.body);
   if (!parsed.success || Object.keys(parsed.data).length === 0) return fail(res, 400, 'Nenhuma alteração válida foi informada.');
   const { customerDocument, phone, email, ...operationFields } = parsed.data;
-  await db.runTransaction(async tx => {
-    const current = await tx.get(req.operationRef);
-    if (!current.exists) throw Object.assign(new Error('Operação não encontrada.'), { status: 404 });
-    if (parsed.data.status) {
-      const currentStatus = current.data().status;
-      if (['CONCLUIDA','CANCELADA'].includes(currentStatus))
-        throw Object.assign(new Error('Uma operação encerrada não pode mudar de status sem reabrir uma etapa.'), { status: 409 });
-      if (parsed.data.status === 'CONCLUIDA' && currentStatus !== 'EM_CONFERENCIA')
-        throw Object.assign(new Error('A operação só pode ser concluída após a coleta e conferência.'), { status: 409 });
-    }
-    const stamp = now();
-    tx.update(req.operationRef, { ...operationFields, updatedAt: stamp, ...(parsed.data.status === 'CONCLUIDA' ? { completedAt: stamp } : {}) });
-    if (parsed.data.customerName !== undefined || customerDocument !== undefined || phone !== undefined || email !== undefined) tx.set(db.collection('customers').doc(req.params.id), { ...(parsed.data.customerName !== undefined ? { name: parsed.data.customerName } : {}), ...(customerDocument !== undefined ? { document: customerDocument || FieldValue.delete() } : {}), ...(phone !== undefined ? { phone: phone || FieldValue.delete() } : {}), ...(email !== undefined ? { email: email || FieldValue.delete() } : {}), updatedAt: stamp }, { merge: true });
-    if (parsed.data.status === 'CONCLUIDA' || parsed.data.status === 'CANCELADA') tx.set(req.operationRef.collection('messages').doc(), { content: parsed.data.status === 'CONCLUIDA' ? (parsed.data.finalMessage || 'A operação foi concluída.') : 'A operação foi cancelada. Entre em contato com nossa equipe se precisar de ajuda.', author: 'Equipe de operações', createdAt: stamp });
-    tx.set(req.operationRef.collection('history').doc(), { action: parsed.data.status === 'CONCLUIDA' ? 'Operação concluída' : parsed.data.status === 'CANCELADA' ? 'Operação cancelada' : 'Informações da operação atualizadas', actor: req.admin.email, createdAt: stamp });
-  });
+  await req.operationRef.update({ ...operationFields, updatedAt: now(), ...(parsed.data.status === 'CONCLUIDA' ? { completedAt: now() } : {}) });
+  if (parsed.data.customerName || customerDocument || phone || email) await db.collection('customers').doc(req.params.id).set({ ...(parsed.data.customerName ? { name: parsed.data.customerName } : {}), ...(customerDocument ? { document: customerDocument } : {}), ...(phone ? { phone } : {}), ...(email ? { email } : {}), updatedAt: now() }, { merge: true });
+  await addHistory(req.operationRef, 'Informações da operação atualizadas', req.admin.email);
   res.json({ ok: true });
 }));
 app.delete('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
@@ -396,21 +359,12 @@ app.post('/api/admin/operations/:id/reopen', needDb, requireAdmin, adminOperatio
   if (!parsed.success) return fail(res, 400, 'Etapa inválida.');
   const definitions = { cadastro: ['AGUARDANDO_CADASTRO','CADASTRO'], embalagem: ['AGUARDANDO_EMBALAGEM','EMBALAGEM'], retirada: ['AGUARDANDO_AGENDAMENTO','RETIRADA'], entregador: ['ENTREGADOR_DESIGNADO','ENTREGADOR'], conclusao: ['EM_CONFERENCIA','CONCLUSAO'] };
   const [status, currentStep] = definitions[parsed.data.stage];
-  await db.runTransaction(async tx => {
-    const opSnap = await tx.get(req.operationRef);
-    if (!opSnap.exists) throw Object.assign(new Error('Operação não encontrada.'), { status: 404 });
-    const stamp = now();
-    tx.update(req.operationRef, { status, currentStep, updatedAt: stamp });
-    tx.set(req.operationRef.collection('steps').doc(parsed.data.stage), { status: 'ATUAL', reopenedAt: stamp, reopenedBy: req.admin.email }, { merge: true });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Etapa ' + parsed.data.stage + ' reaberta', actor: req.admin.email, createdAt: stamp });
-    if (parsed.data.stage === 'cadastro') {
-      tx.set(db.collection('customers').doc(req.params.id), { registrationComplete: false, updatedAt: stamp }, { merge: true });
-      tx.delete(db.collection('bank_details').doc(req.params.id));
-      tx.delete(db.collection('pickup_addresses').doc(req.params.id));
-    }
-    if (parsed.data.stage === 'retirada') tx.delete(db.collection('pickup_schedules').doc(req.params.id));
-    if (parsed.data.stage === 'entregador') tx.delete(db.collection('delivery_partners').doc(req.params.id));
-  });
+  await req.operationRef.update({ status, currentStep, updatedAt: now() });
+  await req.operationRef.collection('steps').doc(parsed.data.stage).set({ status: 'ATUAL', reopenedAt: now(), reopenedBy: req.admin.email }, { merge: true });
+  if (parsed.data.stage === 'cadastro') await db.collection('customers').doc(req.params.id).set({ registrationComplete: false, updatedAt: now() }, { merge: true });
+  if (parsed.data.stage === 'retirada') await db.collection('pickup_schedules').doc(req.params.id).delete();
+  if (parsed.data.stage === 'entregador') await db.collection('delivery_partners').doc(req.params.id).delete();
+  await addHistory(req.operationRef, `Etapa ${parsed.data.stage} reaberta`, req.admin.email);
   res.json({ ok: true });
 }));
 app.post('/api/admin/operations/:id/token', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
@@ -427,14 +381,8 @@ app.post('/api/admin/operations/:id/token', needDb, requireAdmin, adminOperation
 app.post('/api/admin/operations/:id/messages', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
   const parsed = z.object({ content: z.string().trim().min(1).max(2000) }).safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Escreva uma mensagem de até 2.000 caracteres.');
-  await db.runTransaction(async tx => {
-    const opSnap = await tx.get(req.operationRef);
-    if (!opSnap.exists) throw Object.assign(new Error('Operação não encontrada.'), { status: 404 });
-    const stamp = now();
-    tx.set(req.operationRef.collection('messages').doc(), { content: parsed.data.content, author: req.admin.email || 'Administração', createdAt: stamp });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Comunicado enviado ao cliente', actor: req.admin.email, createdAt: stamp });
-    tx.update(req.operationRef, { updatedAt: stamp });
-  });
+  await req.operationRef.collection('messages').add({ content: parsed.data.content, author: req.admin.email || 'Administração', createdAt: now() });
+  await addHistory(req.operationRef, 'Comunicado enviado ao cliente', req.admin.email);
   res.status(201).json({ ok: true });
 }));
 app.post('/api/admin/operations/:id/delivery', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
@@ -442,18 +390,10 @@ app.post('/api/admin/operations/:id/delivery', needDb, requireAdmin, adminOperat
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do parceiro de coleta.');
   const d = parsed.data;
-  const partnerRef = db.collection('delivery_partners').doc(req.params.id);
-  await db.runTransaction(async tx => {
-    const opSnap = await tx.get(req.operationRef);
-    if (!opSnap.exists || !['RETIRADA_AGENDADA', 'ENTREGADOR_DESIGNADO', 'ENTREGADOR_A_CAMINHO', 'ENTREGADOR_NO_LOCAL'].includes(opSnap.data().status))
-      throw Object.assign(new Error('A designação do entregador não está disponível nesta etapa.'), { status: 409 });
-    const stamp = now();
-    tx.set(partnerRef, { operationId: req.params.id, ...d, plateMasked: `${d.plate.slice(0, 3)}••••`, status: 'ENTREGADOR_DESIGNADO', updatedAt: stamp });
-    tx.update(req.operationRef, { status: 'ENTREGADOR_DESIGNADO', currentStep: 'ENTREGADOR', updatedAt: stamp });
-    tx.set(req.operationRef.collection('steps').doc('entregador'), { status: 'ATUAL' }, { merge: true });
-    tx.set(req.operationRef.collection('messages').doc(), { content: `${d.name} foi designado pela ${d.company}. Previsão: ${d.eta}.`, author: req.admin.email, createdAt: stamp });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Entregador designado', actor: req.admin.email, createdAt: stamp });
-  });
+  await db.collection('delivery_partners').doc(req.params.id).set({ operationId: req.params.id, ...d, plateMasked: `${d.plate.slice(0, 3)}••••`, status: 'ENTREGADOR_DESIGNADO', updatedAt: now() });
+  await req.operationRef.update({ status: 'ENTREGADOR_DESIGNADO', currentStep: 'ENTREGADOR', updatedAt: now() });
+  await req.operationRef.collection('messages').add({ content: `${d.name} foi designado pela ${d.company}. Previsão: ${d.eta}.`, author: req.admin.email, createdAt: now() });
+  await addHistory(req.operationRef, 'Entregador designado', req.admin.email);
   res.json({ ok: true });
 }));
 app.patch('/api/admin/operations/:id/delivery/status', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
@@ -461,40 +401,20 @@ app.patch('/api/admin/operations/:id/delivery/status', needDb, requireAdmin, adm
   const parsed = z.object({ status: z.enum(allowed) }).safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Status de coleta inválido.');
   const dRef = db.collection('delivery_partners').doc(req.params.id);
-  const partner = await dRef.get();
-  if (!partner.exists) return fail(res, 409, 'Cadastre um entregador antes de atualizar o status.');
-  const transitions = { ENTREGADOR_DESIGNADO: ['ENTREGADOR_A_CAMINHO'], ENTREGADOR_A_CAMINHO: ['ENTREGADOR_NO_LOCAL'], ENTREGADOR_NO_LOCAL: ['PRODUTO_COLETADO'] };
-  if (parsed.data.status !== partner.data().status && !transitions[partner.data().status]?.includes(parsed.data.status))
-    return fail(res, 409, 'A transição de status não é permitida.');
+  await dRef.update({ status: parsed.data.status, updatedAt: now() });
   const opStatus = parsed.data.status === 'PRODUTO_COLETADO' ? 'EM_CONFERENCIA' : parsed.data.status;
-  await db.runTransaction(async tx => {
-    const [opSnap, partnerSnap] = await Promise.all([tx.get(req.operationRef), tx.get(dRef)]);
-    if (!opSnap.exists || !partnerSnap.exists) throw Object.assign(new Error('Operação ou entregador indisponível.'), { status: 409 });
-    if (parsed.data.status !== partnerSnap.data().status && !transitions[partnerSnap.data().status]?.includes(parsed.data.status))
-      throw Object.assign(new Error('A transição de status não é permitida.'), { status: 409 });
-    const stamp = now();
-    tx.update(dRef, { status: parsed.data.status, updatedAt: stamp });
-    tx.update(req.operationRef, { status: opStatus, currentStep: parsed.data.status === 'PRODUTO_COLETADO' ? 'CONCLUSAO' : 'ENTREGADOR', updatedAt: stamp });
-    tx.set(req.operationRef.collection('history').doc(), { action: `Status do entregador: ${parsed.data.status}`, actor: req.admin.email, createdAt: stamp });
-    if (parsed.data.status === 'PRODUTO_COLETADO') tx.set(req.operationRef.collection('steps').doc('conclusao'), { status: 'ATUAL' }, { merge: true });
-  });
+  await req.operationRef.update({ status: opStatus, currentStep: parsed.data.status === 'PRODUTO_COLETADO' ? 'CONCLUSAO' : 'ENTREGADOR', updatedAt: now() });
+  await addHistory(req.operationRef, `Status do entregador: ${parsed.data.status}`, req.admin.email);
   res.json({ ok: true });
 }));
 app.patch('/api/admin/operations/:id/pickup', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
-  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') }).strict();
+  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados da retirada.');
   if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
-  if (!['RETIRADA_AGENDADA', 'ENTREGADOR_DESIGNADO'].includes(req.operation.status)) return fail(res, 409, 'A retirada não está disponível para edição nesta etapa.');
-  await db.runTransaction(async tx => {
-    const snap = await tx.get(req.operationRef);
-    if (!snap.exists || !['RETIRADA_AGENDADA', 'ENTREGADOR_DESIGNADO'].includes(snap.data().status)) throw Object.assign(new Error('A retirada não está disponível para edição nesta etapa.'), { status: 409 });
-    const stamp = now();
-    const operationStatus = snap.data().status;
-    tx.set(db.collection('pickup_schedules').doc(req.params.id), { operationId: req.params.id, ...parsed.data, status: 'CONFIRMADO', updatedAt: stamp });
-    tx.update(req.operationRef, { status: operationStatus === 'ENTREGADOR_DESIGNADO' ? operationStatus : 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: stamp });
-    tx.set(req.operationRef.collection('history').doc(), { action: 'Agendamento de retirada atualizado', actor: req.admin.email, createdAt: stamp });
-  });
+  await db.collection('pickup_schedules').doc(req.params.id).set({ operationId: req.params.id, ...parsed.data, status: 'CONFIRMADO', updatedAt: now() });
+  await req.operationRef.update({ status: 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: now() });
+  await addHistory(req.operationRef, 'Agendamento de retirada atualizado', req.admin.email);
   res.json({ ok: true });
 }));
 app.post('/api/admin/operations/:id/token/revoke', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
@@ -525,8 +445,9 @@ app.post('/api/client/uploads/submit', clientWriteLimit, needDb, requireClient, 
   }
   const submittedAt = now();
   await db.runTransaction(async tx => {
+    const operationSnap = await tx.get(req.operationRef);
     const stepRef = req.operationRef.collection('steps').doc('embalagem');
-    const [operationSnap, stepSnap] = await Promise.all([tx.get(req.operationRef), tx.get(stepRef)]);
+    const stepSnap = await tx.get(stepRef);
     if (!operationSnap.exists || !['AGUARDANDO_EMBALAGEM','PENDENCIA'].includes(operationSnap.data().status))
       throw Object.assign(new Error('A seleção de foto e vídeo não está disponível nesta etapa.'), { status: 409 });
     if (stepSnap.data()?.status === 'APROVADO') throw Object.assign(new Error('Esta etapa já foi concluída.'), { status: 409 });
@@ -539,10 +460,9 @@ app.post('/api/client/uploads/submit', clientWriteLimit, needDb, requireClient, 
 
 app.use('/api', (req, res) => fail(res, 404, 'Rota da API nao encontrada.'));
 app.use('/api', (err, req, res, next) => {
+  console.error('API error:', err.message);
   if (res.headersSent) return next(err);
-  const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 500 ? err.status : 500;
-  if (status >= 500) console.error('Falha interna na API:', req.method, req.path, err.code || err.name || 'Error');
-  res.status(status).json({ error: status < 500 ? err.message : 'Não foi possível concluir a solicitação.' });
+  res.status(500).json({ error: 'Não foi possível concluir a solicitação.' });
 });
 
 app.use('/assets', express.static(path.join(__dirname, '..', 'assets'), { index: false, dotfiles: 'deny', etag: true, maxAge: isProduction ? '1h' : 0 }));

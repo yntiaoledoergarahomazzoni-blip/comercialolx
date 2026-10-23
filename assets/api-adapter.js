@@ -11,7 +11,6 @@
   }, true);
   const api = async (url, options = {}) => {
     const response = await fetch(url, {
-      cache: 'no-store',
       credentials: 'same-origin',
       headers: { ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
       ...options
@@ -22,32 +21,6 @@
   };
   const flash = message => portal.toast(message);
   const error = err => flash(err?.message || 'Ocorreu um erro. Tente novamente.');
-  let adminTimer = null, adminRefreshing = false, lastAdminFingerprint = '', adminCursor = new Date(0).toISOString();
-  const fingerprint = list => JSON.stringify(list.map(item => [item.id, item.updated, item.status, item.customer]));
-  async function refreshCurrentAdmin(silent = false) {
-    if (adminRefreshing || !location.pathname.startsWith('/admin') || location.pathname === '/admin/login' || document.visibilityState !== 'visible' || sessionStorage.getItem('portal_admin_auth') !== 'yes') return;
-    adminRefreshing = true;
-    try {
-      const id = location.pathname.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1];
-      const since = new Date(Math.max(0, Date.parse(adminCursor) - 1000)).toISOString();
-      const changes = await api(`/api/admin/operations/changes?since=${encodeURIComponent(since)}`);
-      if (!changes.changes.length) return true;
-      const list = await refreshAdmin(id);
-      const before = lastAdminFingerprint;
-      const after = fingerprint(list);
-      if (before && before !== after && silent) flash('Há novas atualizações nas operações.');
-      lastAdminFingerprint = after;
-      if (!document.querySelector('#modal-root .modal')) portal.render();
-      return true;
-    } catch (err) {
-      if (err.message.includes('Sessão') || err.message.includes('Autenticação') || err.message.includes('autorizado')) { sessionStorage.removeItem('portal_admin_auth'); clearInterval(adminTimer); setOperations([]); history.replaceState({}, '', '/admin/login'); portal.render(); }
-      else if (!silent) error(err);
-      return false;
-    }
-    finally { adminRefreshing = false; }
-  }
-  function startAdminRefresh() { clearInterval(adminTimer); lastAdminFingerprint = fingerprint(portal.db.operations); adminTimer = setInterval(() => refreshCurrentAdmin(true), 15000); }
-  window.refreshAdminNow = async () => { if (await refreshCurrentAdmin(false)) flash('Painel atualizado.'); };
   const toIso = value => {
     if (value?.toDate) return value.toDate().toISOString();
     if (value && typeof value === 'object' && Number.isFinite(value._seconds)) return new Date(value._seconds * 1000).toISOString();
@@ -93,8 +66,6 @@
   async function refreshAdmin(id) {
     const response = await api('/api/admin/operations');
     const list = response.operations.map(op => mapOperation(op));
-    const timestamps = list.map(op => op.updated).filter(value => typeof value === 'string').sort();
-    if (timestamps.length) adminCursor = timestamps[timestamps.length - 1];
     setOperations(list);
     if (id) {
       const detail = await api(`/api/admin/operations/${encodeURIComponent(id)}`);
@@ -120,7 +91,6 @@
         }
         const detailId = path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1];
         await Promise.all([refreshAdmin(detailId), refreshSettings()]);
-        startAdminRefresh();
       }
       history.pushState({}, '', path);
       portal.render();
@@ -142,14 +112,12 @@
       await api('/api/auth/session', { method: 'POST', body: JSON.stringify({ idToken: credential.idToken }) });
       sessionStorage.setItem('portal_admin_auth', 'yes');
       await Promise.all([refreshAdmin(), refreshSettings()]);
-      startAdminRefresh();
       history.replaceState({}, '', '/admin/dashboard'); portal.render();
     } catch (err) { if (errorNode) errorNode.textContent = err.message || 'Não foi possível entrar.'; }
   };
   window.logout = async () => {
-    clearInterval(adminTimer);
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* always clear local state */ }
-    sessionStorage.removeItem('portal_admin_auth'); setOperations([]);
+    sessionStorage.removeItem('portal_admin_auth');
     history.replaceState({}, '', '/admin/login'); portal.render();
   };
   window.accessOperation = async event => {
@@ -166,23 +134,21 @@
   };
   let clientTimer = null;
   async function refreshClient(forceRender = false) {
-    if (location.pathname !== '/operacao' || document.visibilityState !== 'visible') return;
+    if (location.pathname !== '/operacao') return;
     if (!forceRender && document.querySelector('#app form')) return;
     try {
       const response = await api('/api/client/operation');
       const raw = response.operation;
       const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
       const previous = portal.db.operations.find(item => item.id === op.id);
-      const stageChanged = previous && (previous.step !== op.step || previous.status !== op.status);
+      const stageChanged = previous && previous.step !== op.step;
       setOperations([op]); portal.render();
       if (forceRender || stageChanged) window.scrollTo({ top: 0, behavior: 'smooth' });
-      if (stageChanged) flash('A operação avançou para uma nova etapa.');
     } catch (err) { if (err.message.includes('expirado') || err.message.includes('revogada')) { sessionStorage.removeItem('portal_client_op'); history.replaceState({}, '', '/acesso'); portal.render(); } }
   }
-  function startClientRefresh() { clearInterval(clientTimer); clientTimer = setInterval(() => refreshClient(false), 15000); }
+  function startClientRefresh() { clearInterval(clientTimer); clientTimer = setInterval(refreshClient, 30000); }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && location.pathname === '/operacao') refreshClient();
-    if (document.visibilityState === 'visible' && adminRoute(location.pathname)) refreshCurrentAdmin(false);
   });
   window.addEventListener('pageshow', () => {
     if (location.pathname === '/operacao') refreshClient();
@@ -262,7 +228,7 @@
   window.deliveryStatus = async (id, status) => runAdminChange(id, `/api/admin/operations/${encodeURIComponent(id)}/delivery/status`, 'PATCH', { status });
   window.saveEdit = async (event, id) => {
     event.preventDefault(); const f = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api(`/api/admin/operations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ customerName: f.customer, customerDocument: f.document || null, phone: f.phone || null, email: f.email || null, productName: f.product, availableAmount: Number(f.amount), pickupAddress: f.pickupAddress || '', internalNotes: f.notes || '' }) }); window.closeModal(); await refreshAdmin(id); portal.render(); }
+    try { await api(`/api/admin/operations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ customerName: f.customer, customerDocument: f.document, phone: f.phone, email: f.email, productName: f.product, availableAmount: Number(f.amount), pickupAddress: f.pickupAddress || '', internalNotes: f.notes || '' }) }); window.closeModal(); await refreshAdmin(id); portal.render(); }
     catch (err) { error(err); }
   };
   window.saveEditedPickup = async (event, id) => {
@@ -330,7 +296,7 @@
   window.addEventListener('popstate', async () => {
     try {
       const path = location.pathname;
-      if (adminRoute(path) && sessionStorage.getItem('portal_admin_auth') === 'yes') await refreshCurrentAdmin(false);
+      if (adminRoute(path) && sessionStorage.getItem('portal_admin_auth') === 'yes') await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]);
       if (path === '/operacao') await refreshClient();
     } catch (err) { error(err); }
     portal.render();
@@ -348,7 +314,7 @@
       if (!health.firebaseConfigured) { setupPage(); return; }
       const path = location.pathname;
       if (path.startsWith('/admin') && path !== '/admin/login') {
-        try { await api('/api/auth/me'); sessionStorage.setItem('portal_admin_auth', 'yes'); await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]); await refreshSettings(); startAdminRefresh(); }
+        try { await api('/api/auth/me'); sessionStorage.setItem('portal_admin_auth', 'yes'); await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]); await refreshSettings(); }
         catch { sessionStorage.removeItem('portal_admin_auth'); }
       }
       if (path === '/operacao') {
