@@ -45,7 +45,7 @@ O navegador verifica se uma foto JPEG/PNG/WEBP de até 10 MB e um vídeo MP4/MOV
 - `/admin/login`: autenticação via Firebase Auth
 - `/admin/dashboard`, `/admin/operacoes`, `/admin/operacoes/:id`, `/admin/entregadores`, `/admin/configuracoes`: painel administrativo
 
-As APIs estão em `/api`. O cookie administrativo é criado pelo backend após verificar o ID token e o claim `admin`. A sessão do cliente tem validade limitada, SameSite Strict, HttpOnly, e valida a revogação do token a cada requisição. A tela do portal consulta atualizações de status periodicamente.
+As APIs estão em `/api`. O cookie administrativo é criado pelo backend após verificar o ID token e o claim `admin`. A sessão do cliente tem validade limitada, SameSite Strict, HttpOnly, e valida a revogação do token a cada requisição. O portal do cliente e o painel administrativo consultam atualizações a cada 15 segundos enquanto a página está visível; o admin também pode atualizar manualmente. O agendamento de retirada aceita somente a data atual no fuso de São Paulo.
 
 ## Fluxo de uma operação
 
