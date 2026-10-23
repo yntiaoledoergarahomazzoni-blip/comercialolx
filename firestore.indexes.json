@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "access_tokens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "operationId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "uploads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "operationId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

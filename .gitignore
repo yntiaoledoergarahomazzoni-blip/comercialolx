@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*-service-account*.json
+firebase-service-account.json
+.firebase/
+.vercel/
+firebase-debug.log
+firestore-debug.log
+*.log

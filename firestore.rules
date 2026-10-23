@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Todas as leituras e gravações passam pela API com Firebase Admin.
+    // O Admin SDK ignora estas regras; nunca habilite acesso público aos documentos.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

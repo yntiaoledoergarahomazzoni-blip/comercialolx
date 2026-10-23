@@ -1,0 +1,7 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Upload e acesso são autorizados pelo backend por URLs assinadas temporárias.
+    match /{allPaths=**} { allow read, write: if false; }
+  }
+}
