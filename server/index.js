@@ -282,7 +282,9 @@ app.get('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, re
 }));
 app.get('/api/admin/settings', needDb, requireAdmin, asyncRoute(async (req, res) => {
   const snap = await db.collection('settings').doc('portal').get();
-  res.json({ settings: snap.exists ? snap.data() : { companyName: 'LKX', phone: '', whatsapp: '', email: '', domain: process.env.NEXT_PUBLIC_APP_URL || '', institutional: '', support: '', primaryColor: '#6545a5', secondaryColor: '#706a78', accentColor: '#de8845' } });
+  const settings = snap.exists ? snap.data() : { companyName: 'LKX', phone: '', whatsapp: '', email: '', domain: process.env.NEXT_PUBLIC_APP_URL || '', institutional: '', support: '', primaryColor: '#6545a5', secondaryColor: '#706a78', accentColor: '#de8845' };
+  if (!settings.whatsapp) settings.whatsapp = '5511970306311';
+  res.json({ settings });
 }));
 app.put('/api/admin/settings', needDb, requireAdmin, asyncRoute(async (req, res) => {
   const schema = z.object({ companyName: z.string().trim().min(2).max(100), phone: z.string().max(30).optional().default(''), whatsapp: z.string().max(30).optional().default(''), email: z.string().email().or(z.literal('')).optional().default(''), domain: z.string().max(200).optional().default(''), institutional: z.string().max(1000).optional().default(''), support: z.string().max(200).optional().default(''), primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/) }).strict();
