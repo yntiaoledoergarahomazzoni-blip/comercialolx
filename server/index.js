@@ -143,8 +143,6 @@ const requireClient = asyncRoute(async (req, res, next) => {
   const opSnap = await db.collection('operations').doc(payload.operationId).get();
   if (!opSnap.exists) return fail(res, 404, 'Operação não encontrada.');
   const operation = opSnap.data();
-  if (operation.status === 'CONCLUIDA' && operation.blockClientAfterCompletion)
-    return fail(res, 403, 'O acesso a esta operação foi encerrado.');
   req.operationRef = opSnap.ref;
   req.operation = operation;
   req.operationId = payload.operationId;
@@ -221,6 +219,14 @@ app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, r
   }});
 }));
 app.post('/api/client/logout', (req, res) => { res.clearCookie(CLIENT_COOKIE, COOKIE_BASE); res.json({ ok: true }); });
+app.post('/api/client/complete', needDb, requireClient, asyncRoute(async (req, res) => {
+  if (req.operation.status !== 'CONCLUIDA') return fail(res, 409, 'A operação ainda não foi concluída pela equipe.');
+  if (req.operation.blockClientAfterCompletion) {
+    await db.collection('access_tokens').doc(req.tokenDocId).update({ active: false, revokedAt: now() });
+  }
+  res.clearCookie(CLIENT_COOKIE, COOKIE_BASE);
+  res.json({ ok: true, accessBlocked: req.operation.blockClientAfterCompletion === true });
+}));
 
 const registrationSchema = z.object({
   name: z.string().trim().min(3).max(120), document: z.string().trim().min(8).max(24),

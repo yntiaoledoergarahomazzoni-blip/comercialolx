@@ -157,6 +157,12 @@
     try { await api('/api/client/logout', { method: 'POST' }); } catch { /* clear local view regardless */ }
     sessionStorage.removeItem('portal_client_op'); setOperations([]); history.replaceState({}, '', '/acesso'); portal.render();
   };
+  window.clientComplete = async () => {
+    try {
+      await api('/api/client/complete', { method: 'POST' });
+      await window.clientLogout();
+    } catch (err) { window.alert(err.message || 'Não foi possível encerrar o acesso. Tente novamente.'); }
+  };
 
   window.createOperation = async event => {
     event.preventDefault();
