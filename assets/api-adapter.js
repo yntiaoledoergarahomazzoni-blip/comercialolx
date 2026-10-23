@@ -50,6 +50,7 @@
       customerDetails: { bank: bank.bank || '', agency: bank.agency || '', account: bank.account || '', accountType: bank.accountType || '', pix: bank.pix || '', zip: address.zip || '', street: address.street || '', number: address.number || '', complement: address.complement || '', neighborhood: address.neighborhood || '', city: address.city || '', state: address.state || '' },
       product: item.productName || item.product || '—', amount: Number(item.availableAmount ?? item.amount ?? 0),
       status: item.status || 'AGUARDANDO_CADASTRO', step: stepFor(item.status),
+      pickupDate: item.pickupDate || detail.pickupDate || null,
       created: toIso(item.createdAt || item.created), updated: toIso(item.updatedAt || item.updated),
       tokenActive: activeToken ? activeToken.active : item.tokenActive ?? true,
       blockWhenCompleted: item.blockClientAfterCompletion ?? item.blockWhenCompleted ?? true,
@@ -166,7 +167,7 @@
     try {
       const response = await api('/api/client/operation');
       const raw = response.operation;
-      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
+      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickupDate: raw.pickupDate, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
       const previous = portal.db.operations.find(item => item.id === op.id);
       const stageChanged = previous && previous.step !== op.step;
       setOperations([op]); portal.render();
@@ -349,7 +350,7 @@
         catch { sessionStorage.removeItem('portal_admin_auth'); }
       }
       if (path === '/operacao') {
-        try { const response = await api('/api/client/operation'); const raw = response.operation; const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw); setOperations([op]); sessionStorage.setItem('portal_client_op', op.id); }
+    try { const response = await api('/api/client/operation'); const raw = response.operation; const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickupDate: raw.pickupDate, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw); setOperations([op]); sessionStorage.setItem('portal_client_op', op.id); }
         catch { history.replaceState({}, '', '/acesso'); }
       }
       portal.render();

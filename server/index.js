@@ -75,7 +75,26 @@ const fail = (res, status, message) => res.status(status).json({ error: message 
 const needDb = (req, res, next) => db ? next() : fail(res, 503, 'Firebase ainda não está configurado.');
 const clean = value => String(value ?? '').trim();
 const now = () => Timestamp.now();
-const saoPauloToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const normalizeLocality = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+const amazonasWestCities = new Set(['AMATURA','ATALAIA DO NORTE','BENJAMIN CONSTANT','EIRUNEPE','ENVIRA','GUAJARA','IPIXUNA','ITAMARATI','JUTAI','SANTO ANTONIO DO ICA','SAO PAULO DE OLIVENCA','TABATINGA','TONANTINS']);
+const brazilTimeZone = address => {
+  const state = clean(address?.state).toUpperCase();
+  const city = normalizeLocality(address?.city);
+  if (state === 'AC' || (state === 'AM' && amazonasWestCities.has(city))) return 'America/Rio_Branco';
+  if (state === 'AM') return 'America/Manaus';
+  if (state === 'MT') return 'America/Cuiaba';
+  if (state === 'MS') return 'America/Campo_Grande';
+  if (state === 'RO') return 'America/Porto_Velho';
+  if (state === 'RR') return 'America/Boa_Vista';
+  if (state === 'PE' && city === 'FERNANDO DE NORONHA') return 'America/Noronha';
+  if (['AL','SE'].includes(state)) return 'America/Maceio';
+  if (state === 'AP' || state === 'PA') return 'America/Belem';
+  if (state === 'BA') return 'America/Bahia';
+  if (['CE','MA','PB','PE','PI','RN'].includes(state)) return 'America/Fortaleza';
+  if (state === 'TO') return 'America/Araguaina';
+  return 'America/Sao_Paulo';
+};
+const brazilToday = address => new Intl.DateTimeFormat('en-CA', { timeZone: brazilTimeZone(address), year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const pickupPeriods = Array.from({ length: 28 }, (_, i) => {
   const format = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   return `${format(480 + i * 30)} – ${format(510 + i * 30)}`;
@@ -199,17 +218,18 @@ app.post('/api/client/session', tokenLimit, needDb, asyncRoute(async (req, res) 
   res.json({ ok: true });
 }));
 app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, res) => {
-  const [customer, steps, pickup, delivery, messages] = await Promise.all([
+  const [customer, steps, pickup, delivery, messages, pickupAddress] = await Promise.all([
     db.collection('customers').doc(req.operationId).get(),
     req.operationRef.collection('steps').get(),
     db.collection('pickup_schedules').doc(req.operationId).get(),
     db.collection('delivery_partners').doc(req.operationId).get(),
-    req.operationRef.collection('messages').orderBy('createdAt', 'desc').limit(30).get()
+    req.operationRef.collection('messages').orderBy('createdAt', 'desc').limit(30).get(),
+    db.collection('pickup_addresses').doc(req.operationId).get()
   ]);
   const o = req.operation;
   res.json({ operation: {
     id: req.operationId, number: o.publicOperationNumber, customerName: o.customerName,
-    productName: o.productName, availableAmount: o.availableAmount, status: o.status,
+    productName: o.productName, availableAmount: o.availableAmount, status: o.status, pickupDate: brazilToday(pickupAddress.data()),
     steps: steps.docs.map(d => ({ id: d.id, ...d.data() })),
     customer: customer.exists ? { name: customer.data().name, phone: customer.data().phone, registrationComplete: customer.data().registrationComplete === true } : null,
     pickup: pickup.exists ? pickup.data() : null,
@@ -260,7 +280,8 @@ app.post('/api/client/pickup', clientWriteLimit, needDb, requireClient, asyncRou
   const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do agendamento.');
-  if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
+  const pickupAddress = await db.collection('pickup_addresses').doc(req.operationId).get();
+  if (parsed.data.date !== brazilToday(pickupAddress.data())) return fail(res, 400, 'A retirada deve ser agendada para hoje no fuso local do endereço informado.');
   if (req.operation.status !== 'AGUARDANDO_AGENDAMENTO' && req.operation.status !== 'EMBALAGEM_APROVADA') return fail(res, 409, 'O agendamento não está disponível nesta etapa.');
   const material = await req.operationRef.collection('steps').doc('embalagem').get();
   if (material.data()?.status !== 'APROVADO') return fail(res, 409, 'Conclua o envio da foto e do vídeo para liberar a retirada.');
@@ -326,7 +347,7 @@ app.get('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, async
     req.operationRef.collection('messages').orderBy('createdAt', 'desc').get(),
     req.operationRef.collection('history').orderBy('createdAt', 'desc').get(), db.collection('access_tokens').where('operationId', '==', id).get()
   ]);
-  res.json({ operation: serialize(req.operation, id), customer: customer.data() || null, bankDetails: bank.data() || null, pickupAddress: address.data() || null, steps: steps.docs.map(d => ({ id: d.id, ...d.data() })), pickup: pickup.data() || null, delivery: delivery.data() || null, messages: messages.docs.map(d => d.data()), history: history.docs.map(d => d.data()), tokens: tokens.docs.map(d => ({ id: d.id, active: d.data().active, lastAccessAt: d.data().lastAccessAt || null })) });
+  res.json({ operation: serialize(req.operation, id), customer: customer.data() || null, bankDetails: bank.data() || null, pickupAddress: address.data() || null, pickupDate: brazilToday(address.data()), steps: steps.docs.map(d => ({ id: d.id, ...d.data() })), pickup: pickup.data() || null, delivery: delivery.data() || null, messages: messages.docs.map(d => d.data()), history: history.docs.map(d => d.data()), tokens: tokens.docs.map(d => ({ id: d.id, active: d.data().active, lastAccessAt: d.data().lastAccessAt || null })) });
 }));
 app.patch('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
   const schema = z.object({ customerName: z.string().trim().min(2).max(120).optional(), customerDocument: z.string().trim().min(8).max(24).optional(), phone: z.string().trim().min(8).max(24).optional(), email: z.string().email().optional(), productName: z.string().trim().min(2).max(180).optional(), availableAmount: z.number().finite().nonnegative().optional(), pickupAddress: z.string().max(500).optional(), status: z.enum(['CONCLUIDA','CANCELADA']).optional(), blockClientAfterCompletion: z.boolean().optional(), internalNotes: z.string().max(2000).optional(), finalMessage: z.string().max(2000).optional() }).strict();
@@ -411,7 +432,8 @@ app.patch('/api/admin/operations/:id/pickup', needDb, requireAdmin, adminOperati
   const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados da retirada.');
-  if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
+  const address = await db.collection('pickup_addresses').doc(req.params.id).get();
+  if (parsed.data.date !== brazilToday(address.data())) return fail(res, 400, 'A retirada deve ser agendada para hoje no fuso local do endereço informado.');
   await db.collection('pickup_schedules').doc(req.params.id).set({ operationId: req.params.id, ...parsed.data, status: 'CONFIRMADO', updatedAt: now() });
   await req.operationRef.update({ status: 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: now() });
   await addHistory(req.operationRef, 'Agendamento de retirada atualizado', req.admin.email);
