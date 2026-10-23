@@ -151,6 +151,16 @@
     } catch (err) { error(err); }
   };
   window.changeStatus = async (id, status) => runAdminChange(id, '/api/admin/operations/'+encodeURIComponent(id), 'PATCH', { status });
+  window.deleteOperation = async id => {
+    if (!window.confirm('Excluir esta operação e todos os dados relacionados? Esta ação não pode ser desfeita.')) return;
+    try {
+      await api(`/api/admin/operations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setOperations(portal.db.operations.filter(operation => operation.id !== id));
+      history.replaceState({}, '', '/admin/operacoes');
+      await refreshAdmin();
+      portal.render(); flash('Operação excluída.');
+    } catch (err) { error(err); }
+  };
   window.toggleToken = async (id, active) => {
     try {
       if (active) {

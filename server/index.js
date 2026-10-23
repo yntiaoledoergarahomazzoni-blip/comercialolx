@@ -327,6 +327,22 @@ app.patch('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asy
   await addHistory(req.operationRef, 'Informações da operação atualizadas', req.admin.email);
   res.json({ ok: true });
 }));
+app.delete('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
+  const id = req.params.id;
+  const tokenDocs = await db.collection('access_tokens').where('operationId', '==', id).get();
+  const writer = db.bulkWriter();
+  tokenDocs.docs.forEach(doc => writer.delete(doc.ref));
+  await writer.close();
+  await Promise.all([
+    db.collection('customers').doc(id).delete(),
+    db.collection('bank_details').doc(id).delete(),
+    db.collection('pickup_addresses').doc(id).delete(),
+    db.collection('pickup_schedules').doc(id).delete(),
+    db.collection('delivery_partners').doc(id).delete(),
+    db.recursiveDelete(req.operationRef)
+  ]);
+  res.json({ ok: true });
+}));
 app.post('/api/admin/operations/:id/reopen', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
   const parsed = z.object({ stage: z.enum(['cadastro','embalagem','retirada','entregador','conclusao']) }).safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Etapa inválida.');
