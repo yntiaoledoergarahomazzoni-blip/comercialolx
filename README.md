@@ -10,7 +10,7 @@ O frontend e uma API Node/Express usam Firebase Authentication e Firestore. As l
 
 ## Requisitos
 
-- Node.js 22 ou superior
+- Node.js 24.x
 - Projeto Firebase com Authentication (e-mail/senha) e Firestore Native
 - Credencial de service account instalada fora do repositório para o backend
 
@@ -46,6 +46,10 @@ O navegador verifica se uma foto JPEG/PNG/WEBP de até 10 MB e um vídeo MP4/MOV
 - `/admin/dashboard`, `/admin/operacoes`, `/admin/operacoes/:id`, `/admin/entregadores`, `/admin/configuracoes`: painel administrativo
 
 As APIs estão em `/api`. O cookie administrativo é criado pelo backend após verificar o ID token e o claim `admin`. A sessão do cliente tem validade limitada, SameSite Strict, HttpOnly, e valida a revogação do token a cada requisição. A tela do portal consulta atualizações de status periodicamente.
+
+## Fluxo de uma operação
+
+No painel, a equipe informa somente o valor disponível. O sistema cria as etapas e gera uma chave individual, exibida uma única vez. O cliente usa a chave em `/acesso` e preenche seus dados pessoais, o produto, os dados bancários e o endereço para continuar.
 
 ## Deploy
 

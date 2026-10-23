@@ -222,6 +222,7 @@ app.post('/api/client/logout', (req, res) => { res.clearCookie(CLIENT_COOKIE, CO
 const registrationSchema = z.object({
   name: z.string().trim().min(3).max(120), document: z.string().trim().min(8).max(24),
   phone: z.string().trim().min(8).max(24), email: z.string().email().max(180),
+  productName: z.string().trim().min(2).max(180),
   bank: z.string().trim().min(2).max(100), agency: z.string().trim().min(1).max(30),
   account: z.string().trim().min(1).max(40), accountType: z.string().trim().min(2).max(40),
   pix: z.string().trim().min(3).max(180), zip: z.string().trim().min(5).max(12),
@@ -240,7 +241,8 @@ app.post('/api/client/registration', clientWriteLimit, needDb, requireClient, as
   await customerRef.set({ operationId: req.operationId, name: data.name, document: data.document, phone: data.phone, email: data.email, registrationComplete: true, updatedAt: now() }, { merge: true });
   await db.collection('bank_details').doc(req.operationId).set({ operationId: req.operationId, bank: data.bank, agency: data.agency, account: data.account, accountType: data.accountType, pix: data.pix, updatedAt: now() });
   await db.collection('pickup_addresses').doc(req.operationId).set({ operationId: req.operationId, zip: data.zip, street: data.street, number: data.addressNumber, complement: data.complement, neighborhood: data.neighborhood, city: data.city, state: data.state, updatedAt: now() });
-  await req.operationRef.update({ status: 'AGUARDANDO_EMBALAGEM', currentStep: 'EMBALAGEM', updatedAt: now() });
+  const registeredAddress = `${data.street}, ${data.addressNumber}${data.complement ? `, ${data.complement}` : ''} - ${data.neighborhood}, ${data.city}/${data.state} - CEP ${data.zip}`;
+  await req.operationRef.update({ customerName: data.name, productName: data.productName, pickupAddress: registeredAddress, status: 'AGUARDANDO_EMBALAGEM', currentStep: 'EMBALAGEM', updatedAt: now() });
   await req.operationRef.collection('steps').doc('cadastro').set({ status: 'CONCLUIDO', completedAt: now() }, { merge: true });
   await req.operationRef.collection('steps').doc('embalagem').set({ status: 'PENDENTE' }, { merge: true });
   await addHistory(req.operationRef, 'Dados cadastrados', 'Cliente');
@@ -282,7 +284,7 @@ app.put('/api/admin/settings', needDb, requireAdmin, asyncRoute(async (req, res)
   res.json({ ok: true, settings: parsed.data });
 }));
 app.post('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, res) => {
-  const schema = z.object({ customerName: z.string().trim().min(2).max(120), document: z.string().trim().min(8).max(24), phone: z.string().trim().min(8).max(24), email: z.string().email(), productName: z.string().trim().min(2).max(180), availableAmount: z.number().finite().nonnegative(), pickupAddress: z.string().max(500).optional().default(''), notes: z.string().max(2000).optional().default(''), blockClientAfterCompletion: z.boolean().default(true) });
+  const schema = z.object({ availableAmount: z.number().finite().nonnegative(), blockClientAfterCompletion: z.boolean().default(true) }).strict();
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados da operação.');
   const id = crypto.randomUUID();
@@ -293,9 +295,9 @@ app.post('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, r
   const serverNow = now();
   const value = parsed.data;
   await db.runTransaction(async tx => {
-    tx.create(opRef, { publicOperationNumber: number, customerName: value.customerName, productName: value.productName, availableAmount: value.availableAmount, status: 'AGUARDANDO_CADASTRO', currentStep: 'CADASTRO', pickupAddress: value.pickupAddress, internalNotes: value.notes, blockClientAfterCompletion: value.blockClientAfterCompletion, createdAt: serverNow, updatedAt: serverNow });
+    tx.create(opRef, { publicOperationNumber: number, customerName: 'Cadastro pendente', productName: 'Aguardando cadastro', availableAmount: value.availableAmount, status: 'AGUARDANDO_CADASTRO', currentStep: 'CADASTRO', pickupAddress: '', blockClientAfterCompletion: value.blockClientAfterCompletion, createdAt: serverNow, updatedAt: serverNow });
     tx.create(db.collection('access_tokens').doc(hashed), { operationId: id, active: true, createdAt: serverNow, accessCount: 0 });
-    tx.create(db.collection('customers').doc(id), { operationId: id, name: value.customerName, document: value.document, phone: value.phone, email: value.email, registrationComplete: false, createdAt: serverNow });
+    tx.create(db.collection('customers').doc(id), { operationId: id, registrationComplete: false, createdAt: serverNow });
     tx.create(opRef.collection('steps').doc('cadastro'), { status: 'ATUAL', createdAt: serverNow });
     tx.create(opRef.collection('steps').doc('embalagem'), { status: 'PENDENTE' });
     tx.create(opRef.collection('steps').doc('retirada'), { status: 'BLOQUEADO' });
@@ -303,7 +305,7 @@ app.post('/api/admin/operations', needDb, requireAdmin, asyncRoute(async (req, r
     tx.create(opRef.collection('steps').doc('conclusao'), { status: 'BLOQUEADO' });
     tx.create(opRef.collection('history').doc(), { action: 'Operação criada', actor: req.admin.email || 'Administração', createdAt: serverNow });
   });
-  res.status(201).json({ operation: { id, number, customerName: value.customerName }, token, accessPath: '/acesso' });
+  res.status(201).json({ operation: { id, number, customerName: 'Cadastro pendente' }, token, accessPath: '/acesso' });
 }));
 app.get('/api/admin/operations/:id', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
   const id = req.params.id;

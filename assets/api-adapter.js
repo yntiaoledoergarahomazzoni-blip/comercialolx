@@ -115,7 +115,7 @@
     try {
       await api('/api/client/session', { method: 'POST', body: JSON.stringify({ token }) });
       const response = await api('/api/client/operation');
-      const op = mapOperation({ ...response.operation, id: response.operation.id, publicOperationNumber: response.operation.number, customerName: response.operation.customer?.name, productName: response.operation.productName, availableAmount: response.operation.availableAmount, pickup: response.operation.pickup, delivery: response.operation.delivery, messages: response.operation.messages, history: response.operation.history, finalMessage: response.operation.finalMessage }, response.operation);
+      const op = mapOperation({ ...response.operation, id: response.operation.id, publicOperationNumber: response.operation.number, customerName: response.operation.customer?.name || response.operation.customerName, productName: response.operation.productName, availableAmount: response.operation.availableAmount, pickup: response.operation.pickup, delivery: response.operation.delivery, messages: response.operation.messages, history: response.operation.history, finalMessage: response.operation.finalMessage }, response.operation);
       setOperations([op]); sessionStorage.setItem('portal_client_op', op.id);
       history.pushState({}, '', '/operacao'); portal.render(); startClientRefresh();
     } catch (err) { if (errorNode) errorNode.textContent = err.message || 'Chave inválida ou indisponível.'; }
@@ -126,7 +126,7 @@
     try {
       const response = await api('/api/client/operation');
       const raw = response.operation;
-      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, history: raw.history, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
+      const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, history: raw.history, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
       setOperations([op]); portal.render();
     } catch (err) { if (err.message.includes('expirado') || err.message.includes('revogada')) { sessionStorage.removeItem('portal_client_op'); history.replaceState({}, '', '/acesso'); portal.render(); } }
   }
@@ -140,7 +140,7 @@
   window.createOperation = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
-    const payload = { customerName: data.customer, document: data.document, phone: data.phone, email: data.email, productName: data.product, availableAmount: Number(data.amount), pickupAddress: data.pickupAddress || '', notes: data.notes || '', blockClientAfterCompletion: event.currentTarget.elements.blockWhenCompleted.checked };
+    const payload = { availableAmount: Number(data.amount), blockClientAfterCompletion: true };
     try {
       const result = await api('/api/admin/operations', { method: 'POST', body: JSON.stringify(payload) });
       await refreshAdmin(result.operation.id); window.closeModal();
