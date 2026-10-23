@@ -76,6 +76,30 @@
     }
     return list;
   }
+  let adminTimer = null, adminRefreshing = false, adminFingerprint = '';
+  const operationFingerprint = list => JSON.stringify(list.map(item => [item.id, item.updated, item.status]));
+  async function refreshAdminIfNeeded(notify = false) {
+    if (adminRefreshing || !location.pathname.startsWith('/admin') || location.pathname === '/admin/login' || document.visibilityState !== 'visible' || sessionStorage.getItem('portal_admin_auth') !== 'yes') return;
+    adminRefreshing = true;
+    try {
+      const detailId = location.pathname.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1];
+      const list = await refreshAdmin(detailId);
+      const fingerprint = operationFingerprint(list);
+      const changed = adminFingerprint !== '' && adminFingerprint !== fingerprint;
+      adminFingerprint = fingerprint;
+      if (changed && notify) portal.toast('Há atualizações nas operações.');
+      if (changed && !document.querySelector('#modal-root .modal')) portal.render();
+    } catch {
+      // A transient polling error should not interrupt the current admin session.
+    } finally {
+      adminRefreshing = false;
+    }
+  }
+  function startAdminRefresh() {
+    clearInterval(adminTimer);
+    adminFingerprint = operationFingerprint(portal.db.operations);
+    adminTimer = setInterval(() => refreshAdminIfNeeded(true), 15000);
+  }
   async function refreshSettings() {
     const response = await api('/api/admin/settings');
     portal.db.settings = { ...portal.db.settings, ...response.settings };
@@ -91,6 +115,7 @@
         }
         const detailId = path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1];
         await Promise.all([refreshAdmin(detailId), refreshSettings()]);
+        startAdminRefresh();
       }
       history.pushState({}, '', path);
       portal.render();
@@ -112,10 +137,12 @@
       await api('/api/auth/session', { method: 'POST', body: JSON.stringify({ idToken: credential.idToken }) });
       sessionStorage.setItem('portal_admin_auth', 'yes');
       await Promise.all([refreshAdmin(), refreshSettings()]);
+      startAdminRefresh();
       history.replaceState({}, '', '/admin/dashboard'); portal.render();
     } catch (err) { if (errorNode) errorNode.textContent = err.message || 'Não foi possível entrar.'; }
   };
   window.logout = async () => {
+    clearInterval(adminTimer);
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* always clear local state */ }
     sessionStorage.removeItem('portal_admin_auth');
     history.replaceState({}, '', '/admin/login'); portal.render();
@@ -149,6 +176,7 @@
   function startClientRefresh() { clearInterval(clientTimer); clientTimer = setInterval(refreshClient, 30000); }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && location.pathname === '/operacao') refreshClient();
+    if (document.visibilityState === 'visible') refreshAdminIfNeeded(false);
   });
   window.addEventListener('pageshow', () => {
     if (location.pathname === '/operacao') refreshClient();
@@ -296,7 +324,10 @@
   window.addEventListener('popstate', async () => {
     try {
       const path = location.pathname;
-      if (adminRoute(path) && sessionStorage.getItem('portal_admin_auth') === 'yes') await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]);
+      if (adminRoute(path) && sessionStorage.getItem('portal_admin_auth') === 'yes') {
+        await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]);
+        startAdminRefresh();
+      }
       if (path === '/operacao') await refreshClient();
     } catch (err) { error(err); }
     portal.render();
@@ -314,7 +345,7 @@
       if (!health.firebaseConfigured) { setupPage(); return; }
       const path = location.pathname;
       if (path.startsWith('/admin') && path !== '/admin/login') {
-        try { await api('/api/auth/me'); sessionStorage.setItem('portal_admin_auth', 'yes'); await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]); await refreshSettings(); }
+        try { await api('/api/auth/me'); sessionStorage.setItem('portal_admin_auth', 'yes'); await refreshAdmin(path.match(/^\/admin\/operacoes\/([^/]+)$/)?.[1]); await refreshSettings(); startAdminRefresh(); }
         catch { sessionStorage.removeItem('portal_admin_auth'); }
       }
       if (path === '/operacao') {
