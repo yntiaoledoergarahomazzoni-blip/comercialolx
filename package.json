@@ -11,7 +11,7 @@
     "admin:grant": "node server/set-admin.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": "24.x"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
