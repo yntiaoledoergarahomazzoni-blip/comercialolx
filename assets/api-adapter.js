@@ -32,10 +32,12 @@
     const history = (detail.history || item.history || []).map(mapHistory);
     const messages = (detail.messages || item.messages || []).map(mapMessage);
     const activeToken = (detail.tokens || []).find(t => t.active);
+    const customerValue = customer.name || item.customerName || item.customer || '';
+    const customerName = typeof customerValue === 'string' ? customerValue : customerValue?.name || '';
     return {
       id: item.id || detail.operation?.id,
       number: item.publicOperationNumber || item.number,
-      customer: customer.name || item.customerName || item.customer || '',
+      customer: customerName,
       document: customer.document || '', phone: customer.phone || item.phone || '', email: customer.email || item.email || '',
       product: item.productName || item.product || '', amount: Number(item.availableAmount ?? item.amount ?? 0),
       status: item.status || 'AGUARDANDO_CADASTRO', step: stepFor(item.status),
