@@ -55,7 +55,7 @@
       package: { status: packageStatus, files: [], request: packageStep?.reviewMessage || '' },
       pickup: p ? { date: p.date, period: p.period, address: p.address, notes: p.notes || '' } : null,
       pickupAddress: item.pickupAddress || '',
-      delivery: d ? { name: d.name, company: d.company, phone: d.operationalPhone || d.phone, identification: d.identification, vehicle: d.vehicleType || d.vehicle, model: d.vehicleModel || d.model, plate: (d.plate || d.plateMasked || '').slice(0, 3), eta: d.eta, status: d.status } : null,
+      delivery: d ? { name: d.name, company: d.company, vehicle: d.vehicleType || d.vehicle, model: d.vehicleModel || d.model, plate: (d.plate || d.plateMasked || '').slice(0, 3), eta: d.eta, status: d.status } : null,
       messages, history, finalMessage: item.finalMessage || detail.finalMessage || '', notes: item.internalNotes || item.notes || ''
     };
   }
@@ -136,10 +136,19 @@
       const response = await api('/api/client/operation');
       const raw = response.operation;
       const op = mapOperation({ id: raw.id, publicOperationNumber: raw.number, customerName: raw.customer?.name || raw.customerName, productName: raw.productName, availableAmount: raw.availableAmount, status: raw.status, pickup: raw.pickup, delivery: raw.delivery, messages: raw.messages, updatedAt: raw.updatedAt, steps: raw.steps, finalMessage: raw.finalMessage }, raw);
+      const previous = portal.db.operations.find(item => item.id === op.id);
+      const stageChanged = previous && previous.step !== op.step;
       setOperations([op]); portal.render();
+      if (forceRender || stageChanged) window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) { if (err.message.includes('expirado') || err.message.includes('revogada')) { sessionStorage.removeItem('portal_client_op'); history.replaceState({}, '', '/acesso'); portal.render(); } }
   }
   function startClientRefresh() { clearInterval(clientTimer); clientTimer = setInterval(refreshClient, 30000); }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && location.pathname === '/operacao') refreshClient();
+  });
+  window.addEventListener('pageshow', () => {
+    if (location.pathname === '/operacao') refreshClient();
+  });
   window.clientLogout = async () => {
     clearInterval(clientTimer);
     try { await api('/api/client/logout', { method: 'POST' }); } catch { /* clear local view regardless */ }
@@ -202,7 +211,7 @@
   };
   window.saveDelivery = async (event, id) => {
     event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
-    const payload = { name: data.name, company: data.company, operationalPhone: data.phone, identification: data.identification, vehicleType: data.vehicle, vehicleModel: data.model, plate: data.plate, eta: data.eta };
+    const payload = { name: data.name, company: data.company, vehicleType: data.vehicle, vehicleModel: data.model, plate: data.plate, eta: data.eta };
     try { await api(`/api/admin/operations/${encodeURIComponent(id)}/delivery`, { method: 'POST', body: JSON.stringify(payload) }); window.closeModal(); await refreshAdmin(id); portal.render(); }
     catch (err) { error(err); }
   };

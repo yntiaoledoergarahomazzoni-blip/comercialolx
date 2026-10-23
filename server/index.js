@@ -75,6 +75,11 @@ const fail = (res, status, message) => res.status(status).json({ error: message 
 const needDb = (req, res, next) => db ? next() : fail(res, 503, 'Firebase ainda não está configurado.');
 const clean = value => String(value ?? '').trim();
 const now = () => Timestamp.now();
+const saoPauloToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const pickupPeriods = Array.from({ length: 28 }, (_, i) => {
+  const format = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  return `${format(480 + i * 30)} – ${format(510 + i * 30)}`;
+});
 const randomToken = () => {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = crypto.randomBytes(12);
@@ -210,7 +215,7 @@ app.get('/api/client/operation', needDb, requireClient, asyncRoute(async (req, r
     steps: steps.docs.map(d => ({ id: d.id, ...d.data() })),
     customer: customer.exists ? { name: customer.data().name, phone: customer.data().phone, registrationComplete: customer.data().registrationComplete === true } : null,
     pickup: pickup.exists ? pickup.data() : null,
-    delivery: delivery.exists ? { name: delivery.data().name, company: delivery.data().company, operationalPhone: delivery.data().operationalPhone, identification: delivery.data().identification, vehicleType: delivery.data().vehicleType, vehicleModel: delivery.data().vehicleModel, plateMasked: delivery.data().plateMasked, eta: delivery.data().eta, status: delivery.data().status } : null,
+    delivery: delivery.exists ? { name: delivery.data().name, company: delivery.data().company, vehicleType: delivery.data().vehicleType, vehicleModel: delivery.data().vehicleModel, plateMasked: delivery.data().plateMasked, eta: delivery.data().eta, status: delivery.data().status } : null,
     finalMessage: o.finalMessage || '', updatedAt: o.updatedAt?.toDate?.().toISOString() || null,
     messages: messages.docs.map(d => ({ ...d.data(), author: 'Equipe de operações', createdAt: d.data().createdAt?.toDate?.().toISOString() })),
   }});
@@ -246,9 +251,10 @@ app.post('/api/client/registration', clientWriteLimit, needDb, requireClient, as
   res.json({ ok: true });
 }));
 app.post('/api/client/pickup', clientWriteLimit, needDb, requireClient, asyncRoute(async (req, res) => {
-  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().min(3).max(40), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
+  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do agendamento.');
+  if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
   if (req.operation.status !== 'AGUARDANDO_AGENDAMENTO' && req.operation.status !== 'EMBALAGEM_APROVADA') return fail(res, 409, 'O agendamento não está disponível nesta etapa.');
   const material = await req.operationRef.collection('steps').doc('embalagem').get();
   if (material.data()?.status !== 'APROVADO') return fail(res, 409, 'Conclua o envio da foto e do vídeo para liberar a retirada.');
@@ -372,7 +378,7 @@ app.post('/api/admin/operations/:id/messages', needDb, requireAdmin, adminOperat
   res.status(201).json({ ok: true });
 }));
 app.post('/api/admin/operations/:id/delivery', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
-  const schema = z.object({ name: z.string().trim().min(2).max(120), company: z.string().trim().min(2).max(120), operationalPhone: z.string().trim().min(8).max(24), identification: z.string().trim().min(2).max(80), vehicleType: z.string().trim().min(2).max(40), vehicleModel: z.string().trim().min(2).max(120), plate: z.string().trim().min(5).max(12), eta: z.string().trim().min(2).max(40) });
+  const schema = z.object({ name: z.string().trim().min(2).max(120), company: z.string().trim().min(2).max(120), vehicleType: z.string().trim().min(2).max(40), vehicleModel: z.string().trim().min(2).max(120), plate: z.string().trim().min(5).max(12), eta: z.string().trim().min(2).max(40) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados do parceiro de coleta.');
   const d = parsed.data;
@@ -394,9 +400,10 @@ app.patch('/api/admin/operations/:id/delivery/status', needDb, requireAdmin, adm
   res.json({ ok: true });
 }));
 app.patch('/api/admin/operations/:id/pickup', needDb, requireAdmin, adminOperation, asyncRoute(async (req, res) => {
-  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().min(3).max(40), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
+  const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), period: z.string().refine(value => pickupPeriods.includes(value)), address: z.string().trim().min(5).max(300), notes: z.string().max(1000).optional().default('') });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return fail(res, 400, 'Revise os dados da retirada.');
+  if (parsed.data.date !== saoPauloToday()) return fail(res, 400, 'A retirada deve ser agendada para hoje.');
   await db.collection('pickup_schedules').doc(req.params.id).set({ operationId: req.params.id, ...parsed.data, status: 'CONFIRMADO', updatedAt: now() });
   await req.operationRef.update({ status: 'RETIRADA_AGENDADA', currentStep: 'ENTREGADOR', updatedAt: now() });
   await addHistory(req.operationRef, 'Agendamento de retirada atualizado', req.admin.email);
